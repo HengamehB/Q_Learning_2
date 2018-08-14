@@ -6,3 +6,4 @@ https://github.com/ljvmiranda921/gym-lattice
 
 The link to the open ai gym package:
 https://github.com/openai/gym
+https://gym.openai.com/docs/

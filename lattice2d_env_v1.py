@@ -1,34 +1,42 @@
 # -*- coding: utf-8 -*-
 
+
 """
 Implements the 2D Lattice Environment
 """
 # Import gym modules
 import sys
 from math import floor
-from collections import OrderedDict
+#from collections import OrderedDict
+
 
 import gym
 from gym import (spaces, utils, logger)
 import numpy as np
 from six import StringIO
 import copy
+import random as rand
+
 
 # Human-readable
 ACTION_TO_STR = {
     0 : 'L', 1 : 'D',
-    2 : 'U', 3 : 'R'}
+    2 : 'U', 3 : 'R', 4:'J'}
+
 
 POLY_TO_INT = { 'x' : 1}
 # 'H' : 1, 'P' : -1,
+
 
 class Lattice2DEnv(gym.Env):
     """A 2-dimensional lattice environment from Dill and Lau, 1989
     [dill1989lattice]_.
 
+
     It follows an absolute Cartesian coordinate system, the location of
     the polymer is stated independently from one another. Thus, we have
     four actions (left, right, up, and down) and a chance of collision.
+
 
     The environment will first place the initial polymer at the origin. Then,
     for each step, agents place another polymer to the lattice. An episode
@@ -36,6 +44,7 @@ class Lattice2DEnv(gym.Env):
     chain is equal to the length of the input sequence minus 1. We then
     compute the reward using the energy minimization rule while accounting
     for the collisions and traps.
+
 
     Attributes
     ----------
@@ -57,14 +66,19 @@ class Lattice2DEnv(gym.Env):
     grid : numpy.ndarray
         Actual grid containing the polymer chain.
 
+
     .. [dill1989lattice] Lau, K.F., Dill, K.A.: A lattice statistical
     mechanics model of the conformational and se quence spaces of proteins.
     Marcromolecules 22(10), 3986–3997 (1989)
     """
     metadata = {'render.modes': ['human', 'ansi']}
+    
+    
 
-    def __init__(self, n, collision_penalty=-2, trap_penalty=0.5, open_loop_penalty = -10):
+
+    def __init__(self, n, p, collision_penalty= -2, trap_penalty= 0.5, open_loop_penalty = -10, failed_jump_penalty = -3):
         """Initializes the lattice
+
 
         Parameters
         ----------
@@ -78,6 +92,7 @@ class Lattice2DEnv(gym.Env):
             computed as :code:`floor(length_of_sequence * trap_penalty)`
             Default is -2.
 
+
         Raises
         ------
         AssertionError
@@ -87,6 +102,9 @@ class Lattice2DEnv(gym.Env):
          
         seq = ['x'] * n
         self.seq = seq
+        self.n = n
+        
+        self.p = p
         
         '''
         try:
@@ -111,6 +129,7 @@ class Lattice2DEnv(gym.Env):
                          (collision_penalty, type(collision_penalty)))
             raise
 
+
         try:
             if not 0 < trap_penalty < 1:
                 raise ValueError("%r (%s) must be between 0 and 1" %
@@ -122,34 +141,45 @@ class Lattice2DEnv(gym.Env):
             raise
         
         self.open_loop_penalty = open_loop_penalty
+        self.failed_jump_penalty = failed_jump_penalty
         
         self.state = [(0, 0)]
         self.actions = []
         self.collisions = 0
         self.trapped = 0
+        
+
 
 #My Changes:
         
-        self.opened = 0
-
+        #self.opened = 0
+        self.origin = (0,0)
+        self.is_looped = False
+        self.plane_actions = []
+        
         # Grid attributes
         self.grid_length = 2 * len(seq) + 1
         self.midpoint = (len(seq), len(seq))
         self.grid = np.zeros(shape=(self.grid_length, self.grid_length), dtype=int)
 
+
         # Automatically assign first element into grid
         self.grid[self.midpoint] = POLY_TO_INT[self.seq[0]]
 
+
         # Define action-observation spaces
-        self.action_space = spaces.Discrete(4)
+        self.action_space = spaces.Discrete(5)
         
         self.observation_space = spaces.Box(low=-2, high=1,
                                             shape=(self.grid_length, self.grid_length),
                                             dtype=int)
         self.last_action = None
-
+    
+    
     def step(self, action):
+        
         """Updates the current chain with the specified action.
+
 
         The action supplied by the agent should be an integer from 0
         to 3. In this case:
@@ -160,8 +190,10 @@ class Lattice2DEnv(gym.Env):
         The best way to remember this is to note that they are similar to the
         'h', 'j', 'k', and 'l' keys in vim.
 
+
         This method returns a set of values similar to the OpenAI gym, that
         is, a tuple :code:`(observations, reward, done, info)`.
+
 
         The observations are arranged as a :code:`numpy.ndarray` matrix, more
         suitable for agents built using convolutional neural networks. The
@@ -170,8 +202,10 @@ class Lattice2DEnv(gym.Env):
         not its grid-like representation, can be accessed from
         :code:`info['state_chain]`.
 
+
         The reward is calculated at the end of every episode, that is, when
         the length of the chain is equal to the length of the input sequence.
+
 
         Parameters
         ----------
@@ -182,6 +216,7 @@ class Lattice2DEnv(gym.Env):
                 - 1 : down
                 - 2 : up
                 - 3 : right
+
 
         Returns
         -------
@@ -194,6 +229,7 @@ class Lattice2DEnv(gym.Env):
         dict
             Additional information regarding the environment.
 
+
         Raises
         ------
         AssertionError
@@ -205,70 +241,111 @@ class Lattice2DEnv(gym.Env):
         if not self.action_space.contains(action):
             raise ValueError("%r (%s) invalid" % (action, type(action)))
 
+
         self.last_action = action
         is_trapped = False # Trap signal
         collision = False  # Collision signal
-
-# My Changes: (Not sure if this is needed) : (len(self.state) == len(self.seq))
-       
-        
+        failed_jump = False
+        #self.origin = (0,0)
+           
         # Obtain coordinate of previous polymer
         x, y = next(reversed(self.state))
         # Get all adjacent coords and next move based on action
-        adj_coords = self._get_adjacent_coords((x, y))
-        next_move = adj_coords[action]
+        adj_coords = self._get_adjacent_coords((x, y))  
+        
+        if action != 4: 
+            next_move = adj_coords[action]
+            
+            #print(next_move)
+            
         # Detects for collision or traps in the given coordinate
         idx = len(self.state)
         
+        #is_looped = False
+        #print (self.origin, '***')
+
 # My Changnes :
         
         old_state = copy.deepcopy(self.state)        
-        
         
         if set(adj_coords.values()).issubset(self.state):
             logger.warn('Your agent was trapped! Ending the episode.')
             self.trapped += 1
             is_trapped = True
-        elif next_move in self.state:
+        
+        elif action != 4 and next_move in self.state:
+            
             self.collisions += 1
             collision = True
+        
+        
+        elif action == 4:
+            
+            if self.is_looped:
+                
+                '''
+                while self.origin in self.state:
+                    
+                    
+                    (x_p, y_p) = (rand.randint(-len(self.seq), len(self.seq)),\
+                     rand.randint(-len(self.seq), len(self.seq)))
+                    
+                    self.origin = (x_p, y_p)
+                    
+                    #print (self.origin,'*')
+                    
+                
+                self.actions.append(action)
+                   
+                try: 
+                    self.state.append(self.origin) 
+                    self.seq[idx]
+                except IndexError:
+                
+                    logger.error('All sites have been passed! Nowhere left to go!')
+                '''
+            else:
+                
+                failed_jump = True
         else:
+            
             self.actions.append(action)
             try: 
-                self.state.append(next_move)
+                self.state.append(next_move) 
                 self.seq[idx]
             except IndexError:
                 
                 logger.error('All sites have been passed! Nowhere left to go!')
 # My Changes :
-                self.opened += 1
+                #self.opened += 1
                 #self.reset()
                 
                 '''
                 raise
                 '''
+                
         # Set-up return values
         
-        #print (len(self.state), idx, self.state[idx])
-
-# Old_version        
         '''
-        is_looped =  (self.state[len(self.state)-1] in self._get_adjacent_coords((0,0)).values()) and \
-        (len(self.state) == len(self.seq))
+        is_looped =  (len(self.state) == len(self.seq)) and \
+        (self.state[len(self.state)] in self._get_adjacent_coords((0,0)).values())
         '''
-        
-        is_looped =  (4 <= len(self.state)) and \
-        (self.state[len(self.state)-1] in self._get_adjacent_coords((0,0)).values())
-        
-#New_Version       
         
         grid = self._draw_grid(self.state)
+        
+        start_pt = self.state.index(self.origin)
+        new_loop = self.state[start_pt:]
+        
+        self.is_looped =  (4 <= len(new_loop) <= self.n) and \
+        (self.state[len(self.state)-1] in self._get_adjacent_coords(self.origin).values())
+
 
 # My Changes:
         
-        done = True if (len(self.state) == len(self.seq) or is_looped or is_trapped) \
-        else False
-        reward = self._compute_reward(is_trapped, collision, is_looped, done)
+        done = True if (len(self.state) == len(self.seq) or \
+                        (action == 4 and (not failed_jump)) or is_trapped) else False
+        
+        reward = self._compute_reward(is_trapped, collision, done, failed_jump)
         info = {
             'chain_length' : len(self.state),
             'seq_length'   : len(self.seq),
@@ -283,80 +360,42 @@ class Lattice2DEnv(gym.Env):
         return (grid, reward, done, info)
         '''
 # My Changes :
+        #print (self.is_looped)
         
         return (old_state, self.state, reward, done, info, grid)      
         
+    
     def reset(self):
         """Resets the environment"""
         self.state = [(0, 0)]
         self.actions = []
         self.collisions = 0
         self.trapped = 0
-        self.opened = 0
+       
+        #self.opened = 0
+        self.origin = (0,0)
+        self.is_looped = False
+        
         self.grid = np.zeros(shape=(self.grid_length, self.grid_length), dtype=int)
         # Automatically assign first element into grid
         self.grid[self.midpoint] = POLY_TO_INT[self.seq[0]]
 
+
         return self.grid
-
-    def render(self, mode='human'):
-        """Renders the environment"""
-
-        outfile = StringIO() if mode == 'ansi' else sys.stdout
-        desc = self.grid.astype(str)
-
-        # Convert everything to human-readable symbols
-        desc[desc == '0'] = '*'
-        desc[desc == '1'] = 'x'
-        '''
-        desc[desc == '-1'] = 'x'
-        '''
-        
-        # Obtain all x-y indices of elements
-        x_free, y_free = np.where(desc == '*')
-        x_s, y_s = np.where(desc == 'x')
-#        x_p, y_p = np.where(desc == 'x')
-
-        # Decode if possible
-        desc.tolist()
-        try:
-            desc = [[c.decode('utf-8') for c in line] for line in desc]
-        except AttributeError:
-            pass
-
-        # All unfilled spaces are gray
-        for unfilled_coords in zip(x_free, y_free):
-            desc[unfilled_coords] = utils.colorize(desc[unfilled_coords], "gray")
-
-        # All hydrophobic molecules are bold-green
-        for hmol_coords in zip(x_s, y_s):
-            desc[hmol_coords] = utils.colorize(desc[hmol_coords], "white")
-        
-        '''
-        # All polar molecules are cyan
-        for pmol_coords in zip(x_p, y_p):
-            desc[pmol_coords] = utils.colorize(desc[pmol_coords], "white")
-        '''
-        
-        # Provide prompt for last action
-        if self.last_action is not None:
-            outfile.write("  ({})\n".format(["Left", "Down", "Up", "Right"][self.last_action]))
-        else:
-            outfile.write("\n")
-
-        # Draw desc
-        outfile.write("\n".join(''.join(line) for line in desc)+"\n")
-
-        if mode != 'human':
-            return outfile
-
+    
     def _get_adjacent_coords(self, coords):
         """Obtains all adjacent coordinates of the current position
+
+
+
 
         Parameters
         ----------
         coords : 2-tuple
             Coordinates (X-y) of the current position
+
+
+
 
         Returns
         -------
@@ -373,13 +412,74 @@ class Lattice2DEnv(gym.Env):
 
         return adjacent_coords
 
+
+    def render(self, mode='human'):
+        """Renders the environment"""
+
+
+        outfile = StringIO() if mode == 'ansi' else sys.stdout
+        desc = self.grid.astype(str)
+
+
+        # Convert everything to human-readable symbols
+        desc[desc == '0'] = '*'
+        desc[desc == '1'] = 'x'
+        '''
+        desc[desc == '-1'] = 'x'
+        '''
+        
+        # Obtain all x-y indices of elements
+        x_free, y_free = np.where(desc == '*')
+        x_s, y_s = np.where(desc == 'x')
+#        x_p, y_p = np.where(desc == 'x')
+
+
+        # Decode if possible
+        desc.tolist()
+        try:
+            desc = [[c.decode('utf-8') for c in line] for line in desc]
+        except AttributeError:
+            pass
+
+
+        # All unfilled spaces are gray
+        for unfilled_coords in zip(x_free, y_free):
+            desc[unfilled_coords] = utils.colorize(desc[unfilled_coords], "gray")
+
+
+        # All hydrophobic molecules are bold-green
+        for hmol_coords in zip(x_s, y_s):
+            desc[hmol_coords] = utils.colorize(desc[hmol_coords], "white")
+        
+        '''
+        # All polar molecules are cyan
+        for pmol_coords in zip(x_p, y_p):
+            desc[pmol_coords] = utils.colorize(desc[pmol_coords], "white")
+        '''
+        
+        # Provide prompt for last action
+        if self.last_action is not None:
+            outfile.write("  ({})\n".format(["Left", "Down", "Up", "Right", "Jump"][self.last_action]))
+        else:
+            outfile.write("\n")
+
+
+        # Draw desc
+        outfile.write("\n".join(''.join(line) for line in desc)+"\n")
+
+
+        if mode != 'human':
+            return outfile
+    
     def _draw_grid(self, chain):
         """Constructs a grid with the current chain
+
 
         Parameters
         ----------
         chain : OrderedDict
             Current chain/state
+
 
         Returns
         -------
@@ -392,25 +492,33 @@ class Lattice2DEnv(gym.Env):
             # before the columns, that's why we interchange.
             self.grid[(trans_y, trans_x)] = POLY_TO_INT['x']
 
+
         return np.flipud(self.grid)
 
-    def _compute_reward(self, is_trapped, collision, is_looped, done):
+
+    def _compute_reward(self, is_trapped, collision, done, failed_jump):
         """Computes the reward for a given time step
+
 
         For every timestep, we compute the reward using the following function:
 
+
         .. code-block:: python
+
 
             reward_t = state_reward 
                        + collision_penalty
                        + actual_trap_penalty
 
+
         The :code:`state_reward` is only computed at the end of the episode
         (Gibbs free energy) and its value is :code:`0` for every timestep
         before that.
 
+
         The :code:`collision_penalty` is given when the agent makes an invalid
         move, i.e. going to a space that is already occupied.
+
 
         The :code:`actual_trap_penalty` is computed whenever the agent
         completely traps itself and has no more moves available. Overall, we
@@ -418,6 +526,7 @@ class Lattice2DEnv(gym.Env):
         subtract that with the following equation:
         :code:`floor(length_of_sequence * trap_penalty)`
         try:
+
 
         Parameters
         ----------
@@ -428,6 +537,7 @@ class Lattice2DEnv(gym.Env):
         collision : bool
             Collision signal
 
+
         Returns
         -------
         int
@@ -436,35 +546,60 @@ class Lattice2DEnv(gym.Env):
 #        state_reward = self._compute_free_energy(self.state) if done else 0
         collision_penalty = self.collision_penalty if collision else 0
         actual_trap_penalty = -floor(len(self.seq) * self.trap_penalty) if is_trapped else 0
-        open_loop_penalty = self.open_loop_penalty if not (is_looped) and done else 0
+        
+        '''
+        '''''''''''''''''''''''''''''''''''''''''''''
+        ''' This Whole Chunk is Open_Loop Penalty '''
+        '''''''''''''''''''''''''''''''''''''''''''''
+        '''
+        if done and self.is_looped:
+            open_loop_penalty = +7
+            
+        elif done and not self.is_looped:
+            open_loop_penalty = self.open_loop_penalty
+            
+        else:
+            open_loop_penalty = 0
+            
+            
+        #open_loop_penalty = self.open_loop_penalty if not (self.is_looped) and done else 0
+        
+        failed_jump_penalty = self.failed_jump_penalty if failed_jump else 0
         # Compute reward at timestep, the state_reward is originally
         # negative (Gibbs), so we invert its sign.
 #Changed!
         '''
         reward =  -state_reward + collision_penalty + actual_trap_penalty
         '''
-        reward =  collision_penalty + actual_trap_penalty + open_loop_penalty -0.01 *len(self.state)
+        reward =  collision_penalty + actual_trap_penalty + \
+        open_loop_penalty + failed_jump_penalty
         
         return reward
 
+
     def _compute_free_energy(self, chain):
         """Computes the Gibbs free energy given the lattice's state
+
 
         The free energy is only computed at the end of each episode. This
         follow the same energy function given by Dill et. al.
         [dill1989lattice]_
 
+
         Recall that the goal is to find the configuration with the lowest
         energy.
+
 
         .. [dill1989lattice] Lau, K.F., Dill, K.A.: A lattice statistical
         mechanics model of the conformational and se quence spaces of proteins.
         Marcromolecules 22(10), 3986–3997 (1989)
 
+
         Parameters
         ----------
         chain : OrderedDict
             Current chain in the lattice
+
 
         Returns
         -------
@@ -474,12 +609,14 @@ class Lattice2DEnv(gym.Env):
         h_polymers = [x for x in chain if chain[x] == 'H']
         h_pairs = [(x, y) for x in h_polymers for y in h_polymers]
 
+
         # Compute distance between all hydrophobic pairs
         h_adjacent = []
         for pair in h_pairs:
             dist = np.linalg.norm(np.subtract(pair[0], pair[1]))
             if dist == 1.0: # adjacent pairs have a unit distance
                 h_adjacent.append(pair)
+
 
         # Get the number of consecutive H-pairs in the string,
         # these are not included in computing the energy
@@ -488,9 +625,14 @@ class Lattice2DEnv(gym.Env):
             if (self.seq[i] == 'H') and (self.seq[i] == self.seq[i-1]):
                 h_consecutive += 1
 
+
         # Remove duplicate pairs of pairs and subtract the
         # consecutive pairs
         nb_h_adjacent = len(h_adjacent) / 2
         gibbs_energy = nb_h_adjacent - h_consecutive
         reward = - gibbs_energy
         return int(reward)
+
+
+
+

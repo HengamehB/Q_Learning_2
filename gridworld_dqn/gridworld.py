@@ -59,8 +59,8 @@ class GridWorldEnv():
         self.state = state
         return state
 
-    def moveChar(self,direction):
-        d = actions[direction]
+    def moveChar(self, direction):
+        d = self.actions[direction]
         hero = self.objects[0]
         heroX = hero.x
         heroY = hero.y

@@ -1,36 +1,42 @@
 from gridworld import *
 import matplotlib.pyplot as plt
 import numpy as np
+import pickle
 import random
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
+import time
 import os
 
 N = 5
 
 env = GridWorldEnv(partial=False, size=N)
-plt.show()
 
 class QNet():
     def __init__(self, h_size):
         self.frame_input = tf.placeholder(
             shape=[None, IMG_SIZE*IMG_SIZE*3], dtype=tf.float32)
         self.frame = tf.reshape(self.frame_input, shape=[-1,IMG_SIZE,IMG_SIZE,3])
+        print('frame =', self.frame)
 
         # TODO(gkanwar): What does num_outputs dictate?
         self.conv = []
         self.conv.append(slim.conv2d(
-            inputs=self.frame_input, num_outputs=32, kernel_size=[8,8],
+            inputs=self.frame, num_outputs=32, kernel_size=[8,8],
             stride=[4,4], padding='VALID', biases_initializer=None))
+        print('conv0 =', self.conv[-1])
         self.conv.append(slim.conv2d(
             inputs=self.conv[-1], num_outputs=64, kernel_size=[4,4],
             stride=[2,2], padding='VALID', biases_initializer=None))
+        print('conv1 =', self.conv[-1])
         self.conv.append(slim.conv2d(
             inputs=self.conv[-1], num_outputs=64, kernel_size=[3,3],
             stride=[1,1], padding='VALID', biases_initializer=None))
+        print('conv2 =', self.conv[-1])
         self.conv.append(slim.conv2d(
-            inputs=self.conv[-1], num_outputs=64, kernel_size=[7,7],
+            inputs=self.conv[-1], num_outputs=h_size, kernel_size=[7,7],
             stride=[1,1], padding='VALID', biases_initializer=None))
+        print('conv3 =', self.conv[-1])
         
         # Advantage and value streams (dualing Q learning)
         self.stream_ac, self.stream_vc = tf.split(self.conv[-1], 2, 3)
@@ -40,18 +46,18 @@ class QNet():
         xavier_init = tf.contrib.layers.xavier_initializer()
         self.a_W = tf.Variable(xavier_init([h_size//2, env.n_actions]))
         self.v_W = tf.Variable(xavier_init([h_size//2, 1]))
-        self.a_out = tf.matmul(self.stream_a, a_W)
-        self.v_out = tf.matmul(self.stream_v, v_W)
+        self.a_out = tf.matmul(self.stream_a, self.a_W)
+        self.v_out = tf.matmul(self.stream_v, self.v_W)
 
         # Combining streams
         a_meanless = tf.subtract(
-            self.a_out, tf.reduce_mean(self.a_out, axis=1, keep_dims=True))
+            self.a_out, tf.reduce_mean(self.a_out, axis=1, keepdims=True))
         self.Q_out = self.v_out + a_meanless
         self.Q_predict = tf.argmax(self.Q_out, 1)
 
         # Loss fn
         self.Q_target = tf.placeholder(shape=[None], dtype=tf.float32)
-        self.actions = tf.placeholder(shape[None], dtype=tf.int32)
+        self.actions = tf.placeholder(shape=[None], dtype=tf.int32)
         self.actions_onehot = tf.one_hot(
             self.actions, env.n_actions, dtype=tf.float32)
 
@@ -75,11 +81,11 @@ class ExperienceBuffer():
         excess = len(self.buf) + len(exp) - self.buf_size
         if excess > 0:
             self.buf[0:excess] = []
-            self.buf.extend(exp)
+        self.buf.extend(exp)
 
     def sample(self, size):
         return np.reshape(
-            np.array(random.sample(self.buf, size)), [size, exp_size])
+            np.array(random.sample(self.buf, size)), [size, self.exp_size])
 
 # Just flatten for input to network
 def preprocess_state(state):
@@ -106,18 +112,18 @@ def eps_greedy(blind, greedy, eps, pre_train=False):
 
 ### Do the thing!
 batch_size = 32
-update_freq = 4  # frequency of training steps
+update_freq = 8  # frequency of training steps
 gamma = 0.99  # discount
 start_eps = 1.0
 end_eps = 0.1
-annealing_steps = 100
+annealing_steps = 1000
 num_episodes = 100
-pre_train_steps = 100
+pre_train_steps = 1000
 max_episode_len = 50
 load_model = False
-model_path = "./gridmodel/"
-h_size = 512
-tau = 0.001
+model_path = "./gridmodel"
+h_size = 256
+tau = 0.01
 
 tf.reset_default_graph()
 main_net = QNet(h_size)
@@ -140,7 +146,7 @@ def update_eps():
     if total_steps > pre_train_steps and eps > end_eps:
         eps -= delta_eps
 
-if not os.path.exists(path): os.makedirs(path)
+if not os.path.exists(model_path): os.makedirs(model_path)
 
 with tf.Session() as sess:
     sess.run(init)
@@ -155,7 +161,7 @@ with tf.Session() as sess:
         episode_reward = 0
         def blind(): return np.random.randint(env.n_actions)
         def greedy(): return sess.run(
-                main_net.predict, feed_dict={main_net.frame_input: [state]})[0]
+                main_net.Q_predict, feed_dict={main_net.frame_input: [state]})[0]
         for j in range(max_episode_len):
             action = eps_greedy(blind, greedy, eps, total_steps < pre_train_steps)
             new_state, reward, done = env.step(action)
@@ -167,23 +173,29 @@ with tf.Session() as sess:
             update_eps()
 
             if total_steps > pre_train_steps and total_steps % update_freq == 0:
+                start_overall = time.time()
                 train_batch = global_exp_buf.sample(batch_size)
                 # Double DQN
+                start_dqn = time.time()
                 Q1 = sess.run(main_net.Q_predict, feed_dict={
                     main_net.frame_input: np.vstack(train_batch[:,3])})
+                # print('Q1 time = ' + str(time.time() - start_dqn))
+                start_dqn = time.time()
                 Q2 = sess.run(target_net.Q_out, feed_dict={
                     target_net.frame_input: np.vstack(train_batch[:,3])})
+                # print('Q2 time = ' + str(time.time() - start_dqn))
                 done_mask = 1 - train_batch[:,4] # 0 = done, 1 = not done
-                print('Q2 dims: ' + str(Q2.shape))
-                assert(Q2.shape[0] == batch_size) # ??
                 QQ = Q2[range(batch_size), Q1]
                 train_reward = train_batch[:,2]
                 Q_target = train_reward + gamma * QQ * done_mask
+                start_train = time.time()
                 sess.run(main_net.update_model, feed_dict = {
                     main_net.frame_input: np.vstack(train_batch[:,0]),
                     main_net.Q_target: Q_target,
                     main_net.actions: train_batch[:,1]})
+                # print('train time = ' + str(time.time() - start_train))
                 run_ops(update_target_ops, sess)
+                # print('overall time = ' + str(time.time() - start_overall))
 
             state = new_state
             if done: break
@@ -191,12 +203,14 @@ with tf.Session() as sess:
         global_exp_buf.add(episode_exp_buf.buf)
         all_rewards.append(episode_reward)
         if i % 1000 == 0:
-            filename = path+'/model-'+str(i)+'.mdl'
+            filename = model_path+'/model-'+str(i)+'.mdl'
             saver.save(sess, filename)
             print('Saved model ' + filename)
         if len(all_rewards) % 10 == 0:
             print(total_steps, np.mean(all_rewards[-10:]), eps)
-    filename = path+'/model-final.mdl'
+    filename = model_path+'/model-final.mdl'
     saver.save(sess, filename)
 
+with open(model_path+'/rewards.pkl', 'wb') as f:
+    pickle.dump(all_rewards, f)
 print("Percent successful episodes: " + str(sum(all_rewards) / num_episodes))

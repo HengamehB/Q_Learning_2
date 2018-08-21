@@ -8,7 +8,7 @@ import itertools
 import scipy.misc
 import matplotlib.pyplot as plt
 
-IMG_SIZE = 84
+IMG_SIZE = 7
 
 
 class GridObj():

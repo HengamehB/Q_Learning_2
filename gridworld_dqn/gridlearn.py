@@ -22,21 +22,13 @@ class QNet():
         # TODO(gkanwar): What does num_outputs dictate?
         self.conv = []
         self.conv.append(slim.conv2d(
-            inputs=self.frame, num_outputs=32, kernel_size=[8,8],
-            stride=[4,4], padding='VALID', biases_initializer=None))
+            inputs=self.frame, num_outputs=64, kernel_size=[3,3],
+            stride=[1,1], padding='VALID', biases_initializer=None))
         print('conv0 =', self.conv[-1])
         self.conv.append(slim.conv2d(
-            inputs=self.conv[-1], num_outputs=64, kernel_size=[4,4],
-            stride=[2,2], padding='VALID', biases_initializer=None))
+            inputs=self.conv[-1], num_outputs=h_size, kernel_size=[5,5],
+            stride=[1,1], padding='VALID', biases_initializer=None))
         print('conv1 =', self.conv[-1])
-        self.conv.append(slim.conv2d(
-            inputs=self.conv[-1], num_outputs=64, kernel_size=[3,3],
-            stride=[1,1], padding='VALID', biases_initializer=None))
-        print('conv2 =', self.conv[-1])
-        self.conv.append(slim.conv2d(
-            inputs=self.conv[-1], num_outputs=h_size, kernel_size=[7,7],
-            stride=[1,1], padding='VALID', biases_initializer=None))
-        print('conv3 =', self.conv[-1])
         
         # Advantage and value streams (dualing Q learning)
         self.stream_ac, self.stream_vc = tf.split(self.conv[-1], 2, 3)
@@ -116,9 +108,9 @@ update_freq = 8  # frequency of training steps
 gamma = 0.99  # discount
 start_eps = 1.0
 end_eps = 0.1
-annealing_steps = 1000
-num_episodes = 100
-pre_train_steps = 1000
+annealing_steps = 10000
+num_episodes = 10000
+pre_train_steps = 10000
 max_episode_len = 50
 load_model = False
 model_path = "./gridmodel"
@@ -213,4 +205,4 @@ with tf.Session() as sess:
 
 with open(model_path+'/rewards.pkl', 'wb') as f:
     pickle.dump(all_rewards, f)
-print("Percent successful episodes: " + str(sum(all_rewards) / num_episodes))
+print("Avg episode reward: " + str(sum(all_rewards) / num_episodes))

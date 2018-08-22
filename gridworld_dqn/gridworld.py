@@ -8,8 +8,6 @@ import itertools
 import scipy.misc
 import matplotlib.pyplot as plt
 
-IMG_SIZE = 7
-
 
 class GridObj():
     def __init__(self, coordinates, size, intensity, channel, reward, name):
@@ -30,6 +28,7 @@ class GridWorldEnv():
     ]
     
     def __init__(self, partial, size):
+        self.IMG_SIZE = size + 2 # account for border
         self.sizeX = size
         self.sizeY = size
         self.n_actions = len(self.actions)
@@ -47,14 +46,14 @@ class GridWorldEnv():
         self.objects.append(goal)
         guard = GridObj(self.newPosition(),1,1,0,-1,'guard')
         self.objects.append(guard)
-        goal2 = GridObj(self.newPosition(),1,1,1,1,'goal')
-        self.objects.append(goal2)
-        guard2 = GridObj(self.newPosition(),1,1,0,-1,'guard')
-        self.objects.append(guard2)
-        goal3 = GridObj(self.newPosition(),1,1,1,1,'goal')
-        self.objects.append(goal3)
-        goal4 = GridObj(self.newPosition(),1,1,1,1,'goal')
-        self.objects.append(goal4)
+        # goal2 = GridObj(self.newPosition(),1,1,1,1,'goal')
+        # self.objects.append(goal2)
+        # guard2 = GridObj(self.newPosition(),1,1,0,-1,'guard')
+        # self.objects.append(guard2)
+        # goal3 = GridObj(self.newPosition(),1,1,1,1,'goal')
+        # self.objects.append(goal3)
+        # goal4 = GridObj(self.newPosition(),1,1,1,1,'goal')
+        # self.objects.append(goal4)
         state = self.renderEnv()
         self.state = state
         return state
@@ -122,9 +121,9 @@ class GridWorldEnv():
                 hero = item
         if self.partial == True:
             a = a[hero.y:hero.y+3,hero.x:hero.x+3,:]
-        b = scipy.misc.imresize(a[:,:,0],[IMG_SIZE,IMG_SIZE,1],interp='nearest')
-        c = scipy.misc.imresize(a[:,:,1],[IMG_SIZE,IMG_SIZE,1],interp='nearest')
-        d = scipy.misc.imresize(a[:,:,2],[IMG_SIZE,IMG_SIZE,1],interp='nearest')
+        b = scipy.misc.imresize(a[:,:,0],[self.IMG_SIZE,self.IMG_SIZE,1],interp='nearest')
+        c = scipy.misc.imresize(a[:,:,1],[self.IMG_SIZE,self.IMG_SIZE,1],interp='nearest')
+        d = scipy.misc.imresize(a[:,:,2],[self.IMG_SIZE,self.IMG_SIZE,1],interp='nearest')
         a = np.stack([b,c,d],axis=2)
         return a
 

@@ -1,15 +1,26 @@
 from gridworld import *
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 import pickle
 import random
+import sys
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
 import time
-import os
+
+def usage(name):
+    print('Usage: '+name+' tag0 [tag1 ...]')
+
+dualing = False
+tags = sys.argv[1:]
+for tag in tags:
+    if tag == 'dualing': dualing = True
+    else:
+        print('Unknown tag ' + tag)
+        sys.exit(2)
 
 N = 5
-
 env = GridWorldEnv(partial=False, size=N)
 
 class QNet():
@@ -19,7 +30,6 @@ class QNet():
         self.frame = tf.reshape(self.frame_input, shape=[-1,IMG_SIZE,IMG_SIZE,3])
         print('frame =', self.frame)
 
-        # TODO(gkanwar): What does num_outputs dictate?
         self.conv = []
         self.conv.append(slim.conv2d(
             inputs=self.frame, num_outputs=64, kernel_size=[3,3],
@@ -29,22 +39,30 @@ class QNet():
             inputs=self.conv[-1], num_outputs=h_size, kernel_size=[5,5],
             stride=[1,1], padding='VALID', biases_initializer=None))
         print('conv1 =', self.conv[-1])
-        
-        # Advantage and value streams (dualing Q learning)
-        self.stream_ac, self.stream_vc = tf.split(self.conv[-1], 2, 3)
-        self.stream_a = slim.flatten(self.stream_ac)
-        self.stream_v = slim.flatten(self.stream_vc)
-        # Xavier init to have best possible signal penetration
-        xavier_init = tf.contrib.layers.xavier_initializer()
-        self.a_W = tf.Variable(xavier_init([h_size//2, env.n_actions]))
-        self.v_W = tf.Variable(xavier_init([h_size//2, 1]))
-        self.a_out = tf.matmul(self.stream_a, self.a_W)
-        self.v_out = tf.matmul(self.stream_v, self.v_W)
 
-        # Combining streams
-        a_meanless = tf.subtract(
-            self.a_out, tf.reduce_mean(self.a_out, axis=1, keepdims=True))
-        self.Q_out = self.v_out + a_meanless
+
+        if dualing:
+            # Advantage and value streams (dualing Q learning)
+            self.stream_ac, self.stream_vc = tf.split(self.conv[-1], 2, 3)
+            self.stream_a = slim.flatten(self.stream_ac)
+            self.stream_v = slim.flatten(self.stream_vc)
+            # Xavier init to have best possible signal penetration
+            xavier_init = tf.contrib.layers.xavier_initializer()
+            self.a_W = tf.Variable(xavier_init([h_size//2, env.n_actions]))
+            self.v_W = tf.Variable(xavier_init([h_size//2, 1]))
+            self.a_out = tf.matmul(self.stream_a, self.a_W)
+            self.v_out = tf.matmul(self.stream_v, self.v_W)
+
+            # Combining streams
+            a_meanless = tf.subtract(
+                self.a_out, tf.reduce_mean(self.a_out, axis=1, keepdims=True))
+            self.Q_out = self.v_out + a_meanless
+        else:
+            self.stream = slim.flatten(self.conv[-1])
+            xavier_init = tf.contrib.layers.xavier_initializer()
+            self.W = tf.Variable(xavier_init([h_size, env.n_actions]))
+            self.Q_out = tf.matmul(self.stream, self.W)
+            
         self.Q_predict = tf.argmax(self.Q_out, 1)
 
         # Loss fn
@@ -94,7 +112,7 @@ def make_update_target(tf_vars, tau):
 def run_ops(ops, sess):
     for op in ops: sess.run(op)
 
-# epsilon-greedy action selection from range(n)
+# epsilon-greedy action selection
 def eps_greedy(blind, greedy, eps, pre_train=False):
     if pre_train or np.random.rand(1) < eps:
         return blind()
@@ -113,7 +131,7 @@ num_episodes = 10000
 pre_train_steps = 10000
 max_episode_len = 50
 load_model = False
-model_path = "./gridmodel"
+save_path = "_".join(["./gridmodel"] + sorted(tags))
 h_size = 256
 tau = 0.01
 
@@ -138,13 +156,13 @@ def update_eps():
     if total_steps > pre_train_steps and eps > end_eps:
         eps -= delta_eps
 
-if not os.path.exists(model_path): os.makedirs(model_path)
+if not os.path.exists(save_path): os.makedirs(save_path)
 
 with tf.Session() as sess:
     sess.run(init)
     if load_model == True:
-        print('Loading ' + model_path)
-        checkpoint = tf.train.get_checkpoint_state(model_path)
+        print('Loading ' + save_path)
+        checkpoint = tf.train.get_checkpoint_state(save_path)
         saver.restore(sess, checkpoint.model_checkpoint_path)
     for i in range(num_episodes):
         episode_exp_buf = ExperienceBuffer()
@@ -195,14 +213,14 @@ with tf.Session() as sess:
         global_exp_buf.add(episode_exp_buf.buf)
         all_rewards.append(episode_reward)
         if i % 1000 == 0:
-            filename = model_path+'/model-'+str(i)+'.mdl'
+            filename = save_path+'/model-'+str(i)+'.mdl'
             saver.save(sess, filename)
             print('Saved model ' + filename)
         if len(all_rewards) % 10 == 0:
             print(total_steps, np.mean(all_rewards[-10:]), eps)
-    filename = model_path+'/model-final.mdl'
+    filename = save_path+'/model-final.mdl'
     saver.save(sess, filename)
 
-with open(model_path+'/rewards.pkl', 'wb') as f:
+with open(save_path+'/rewards.pkl', 'wb') as f:
     pickle.dump(all_rewards, f)
 print("Avg episode reward: " + str(sum(all_rewards) / num_episodes))

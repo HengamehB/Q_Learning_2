@@ -1,4 +1,4 @@
-from gridworld import *
+#from gridworld import *
 import matplotlib.pyplot as plt
 import numpy as np
 import os 
@@ -8,6 +8,9 @@ import sys
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
 import time
+
+from gym_lattice.envs import Lattice2DEnv
+from gym import spaces
 
 def usage(name):
     print('Usage: '+name+' tag0 [tag1 ...]')
@@ -20,23 +23,27 @@ for tag in tags:
         print('Unknown tag ' + tag)
         sys.exit(2)
 
-N = 5
-env = GridWorldEnv(partial=False, size=N)
+p = [4] # number and length of operators
+N = 4*p[0]-1
+env = Lattice2DEnv(p)
+
+#action_space = spaces.Discrete(5)
+action_space = 5
 
 class QNet():
     def __init__(self, h_size):
         self.frame_input = tf.placeholder(
-            shape=[None, env.IMG_SIZE*env.IMG_SIZE*3], dtype=tf.float32)
-        self.frame = tf.reshape(self.frame_input, shape=[-1,env.IMG_SIZE,env.IMG_SIZE,3])
+            shape=[None, env.grid_length*env.grid_length*3], dtype=tf.float32)
+        self.frame = tf.reshape(self.frame_input, shape=[-1,env.grid_length,env.grid_length,3])
         print('frame =', self.frame)
 
         self.conv = []
         self.conv.append(slim.conv2d(
-            inputs=self.frame, num_outputs=64, kernel_size=[3,3],
-            stride=[1,1], padding='VALID', biases_initializer=None))
+            inputs=self.frame, num_outputs= h_size/4, kernel_size=[3,3],
+            stride=[2,2], padding='VALID', biases_initializer=None))
         print('conv0 =', self.conv[-1])
         self.conv.append(slim.conv2d(
-            inputs=self.conv[-1], num_outputs=h_size, kernel_size=[5,5],
+            inputs=self.conv[-1], num_outputs=h_size, kernel_size=[2*p[0],2*p[0]],
             stride=[1,1], padding='VALID', biases_initializer=None))
         print('conv1 =', self.conv[-1])
 
@@ -48,7 +55,7 @@ class QNet():
             self.stream_v = slim.flatten(self.stream_vc)
             # Xavier init to have best possible signal penetration
             xavier_init = tf.contrib.layers.xavier_initializer()
-            self.a_W = tf.Variable(xavier_init([h_size//2, env.n_actions]))
+            self.a_W = tf.Variable(xavier_init([h_size//2, action_space]))
             self.v_W = tf.Variable(xavier_init([h_size//2, 1]))
             self.a_out = tf.matmul(self.stream_a, self.a_W)
             self.v_out = tf.matmul(self.stream_v, self.v_W)
@@ -60,7 +67,7 @@ class QNet():
         else:
             self.stream = slim.flatten(self.conv[-1])
             xavier_init = tf.contrib.layers.xavier_initializer()
-            self.W = tf.Variable(xavier_init([h_size, env.n_actions]))
+            self.W = tf.Variable(xavier_init([h_size, action_space]))
             self.Q_out = tf.matmul(self.stream, self.W)
             
         self.Q_predict = tf.argmax(self.Q_out, 1)
@@ -69,7 +76,7 @@ class QNet():
         self.Q_target = tf.placeholder(shape=[None], dtype=tf.float32)
         self.actions = tf.placeholder(shape=[None], dtype=tf.int32)
         self.actions_onehot = tf.one_hot(
-            self.actions, env.n_actions, dtype=tf.float32)
+            self.actions, action_space, dtype=tf.float32)
 
         self.Q = tf.reduce_sum(tf.multiply(
             self.Q_out, self.actions_onehot), axis=1)
@@ -99,7 +106,7 @@ class ExperienceBuffer():
 
 # Just flatten for input to network
 def preprocess_state(state):
-    return np.reshape(state, [env.IMG_SIZE*env.IMG_SIZE*3])
+    return np.reshape(state, [env.grid_length*env.grid_length*3])
 
 # Update target network using main network
 def make_update_target(tf_vars, tau):
@@ -126,13 +133,13 @@ update_freq = 8  # frequency of training steps
 gamma = 0.99  # discount
 start_eps = 1.0
 end_eps = 0.1
-annealing_steps = 10000
-num_episodes = 10000
+annealing_steps = 10000 #increase 40,000
+num_episodes = 10000 
 pre_train_steps = 10000
 max_episode_len = 50
 load_model = False
 save_path = "_".join(["./gridmodel"] + sorted(tags))
-h_size = 256
+h_size = 1024 #128 
 tau = 0.01
 
 tf.reset_default_graph()
@@ -165,11 +172,14 @@ with tf.Session() as sess:
         checkpoint = tf.train.get_checkpoint_state(save_path)
         saver.restore(sess, checkpoint.model_checkpoint_path)
     for i in range(num_episodes):
+        
+        env.reset()
+        
         episode_exp_buf = ExperienceBuffer()
-        state = preprocess_state(env.reset())
+        state = preprocess_state(env._draw_grid())
         done = False
         episode_reward = 0
-        def blind(): return np.random.randint(env.n_actions)
+        def blind(): return np.random.randint(action_space)
         def greedy(): return sess.run(
                 main_net.Q_predict, feed_dict={main_net.frame_input: [state]})[0]
         for j in range(max_episode_len):
@@ -217,7 +227,7 @@ with tf.Session() as sess:
             saver.save(sess, filename)
             print('Saved model ' + filename)
         if len(all_rewards) % 10 == 0:
-            print(total_steps, np.mean(all_rewards[-10:]), eps)
+            print(i, total_steps, np.mean(all_rewards[-10:]), eps)
     filename = save_path+'/model-final.mdl'
     saver.save(sess, filename)
 

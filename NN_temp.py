@@ -9,7 +9,7 @@ import tensorflow as tf
 import tensorflow.contrib.slim as slim
 import time
 
-from gym_lattice.envs import Lattice2DEnv
+from lattice2d_env import Lattice2DEnv
 from gym import spaces
 
 def usage(name):
